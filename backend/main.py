@@ -34,7 +34,6 @@ STATE_PATH = Path.home() / ".qwenpaw" / "agent-task-callback.json"
 POLL_SECONDS = 20
 HTTP_TIMEOUT = 30.0
 
-
 def _load_state() -> dict:
     if STATE_PATH.exists():
         try:
