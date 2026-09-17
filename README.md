@@ -12,10 +12,65 @@ session as a fresh turn.
 
 ## Install
 
+QwenPaw keeps **two copies** of a plugin and they are *not* symlinked:
+
+| Path | Role |
+| --- | --- |
+| `~/.qwenpaw/plugins/<id>/` | **Loaded at runtime** — this is the code that actually runs |
+| `~/.qwenpaw/workspaces/<agent>/plugin-dev/<id>/` | Development source tree |
+
+Editing only the dev tree does **nothing** until the plugin is reinstalled.
+Keep both in sync, or copy the source over the installed copy and reload:
+
 ```bash
-cp -r . ~/.qwenpaw/workspaces/default/plugin-dev/agent-task-callback
-# then reload the plugin from the QwenPaw console (or restart the service)
+ID=agent-task-callback
+SRC=~/.qwenpaw/workspaces/default/plugin-dev/$ID
+DST=~/.qwenpaw/plugins/$ID
+
+cp "$SRC/plugin.json" "$DST/plugin.json"
+mkdir -p "$DST/backend" && cp "$SRC/backend/main.py" "$DST/backend/main.py"
+rm -rf "$DST/backend/__pycache__"
+
+# then reload from the console, or:
+curl -sS -X POST http://127.0.0.1:19999/api/plugins/install \
+  -H 'Content-Type: application/json' \
+  -d "{\"source\":\"$SRC\",\"force\":true}"
 ```
+
+Always verify both copies agree afterwards:
+
+```bash
+diff -q "$SRC/backend/main.py" "$DST/backend/main.py" && echo IN SYNC
+```
+
+### Which agents see the tools
+
+QwenPaw's plugin router syncs `meta.tools` from `plugin.json` into **every**
+agent's `builtin_tools` config on install/reload — that part is automatic, so
+the manifest must list the tools:
+
+```json
+"meta": { "tools": [ { "name": "watch_agent_task" }, ... ] }
+```
+
+The catch: the sync writes entries with **`enabled: false`**. Until an agent's
+config flips that to `true`, the agent will not be offered the tool. Enabling
+is per-agent and is **not** covered by the plugin:
+
+```python
+from qwenpaw.config.config import load_agent_config, save_agent_config
+
+cfg = load_agent_config(agent_id)          # via qwenpaw.config.utils.load_config
+for n in ("watch_agent_task", "callback_task_status", "cancel_task_callback"):
+    if n in cfg.tools.builtin_tools:
+        cfg.tools.builtin_tools[n].enabled = True
+save_agent_config(agent_id, cfg)
+```
+
+Note this means **newly created agents start disabled** and need the same
+one-time flip. `manifest.version` is reported at load time but is *not* used by
+the framework for upgrade decisions — bump it anyway so consumers can tell
+revisions apart.
 
 ## Tools
 
@@ -62,3 +117,17 @@ Every branch is normalized to keep the required `/api` suffix.
 
 `backend/main.py` is a single self-contained module. It compiles under
 Python 3.12 and its URL-resolution helpers are covered by isolated unit tests.
+
+When changing code, do all three or the change will not take effect:
+
+1. edit the dev source tree,
+2. copy it over `~/.qwenpaw/plugins/agent-task-callback/`,
+3. bump `version` in `plugin.json` and reload.
+
+## Changelog
+
+- **0.1.1** — bump version to match code; document the two-copy install layout
+  and the `enabled: false` tool-sync default.
+- **0.1.0** — initial release: watcher thread, three tools, persisted jobs,
+  409-aware backoff delivery, API base URL resolution
+  (framework resolver > environment > port 19999).
